@@ -1,0 +1,12 @@
+# 密钥（不要把 key 提交到 git）
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
