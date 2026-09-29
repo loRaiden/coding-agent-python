@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 from jinja2.utils import missing
 from torch.optim.optimizer import required
 
+from tools import TOOLS,TOOLS_FUNCS
+
 load_dotenv()  # 读取 .env 里的配置（base_url / auth_token / model）
 
 client = anthropic.Anthropic()  # 自动读取 ANTHROPIC_BASE_URL 和 ANTHROPIC_AUTH_TOKEN
@@ -177,6 +179,29 @@ def excute_toll_call(tool_use)->dict:
                 f"{type(exc).__name__}:{exc}"
             ),
         }
+# ─────────────────────────────────────────────────────────────
+# 5、读写文件工具
+# ─────────────────────────────────────────────────────────────
+def execute_tool_call(tool_use):
+    try:
+        func=TOOLS_FUNCS[tool_use.name]
+        result=func(**tool_use.input)
+
+        return {
+            "type": "tool_result",
+            "tool_use_id": tool_use.id,
+            "content": str(result),
+        }
+    except Exception as exc:
+        return {
+            "type": "tool_result",
+            "tool_use_id": tool_use.id,
+            "is_error":True,
+            "content":f"工具执行失败：{type(exc).__name__}: {exc}"
+        }
+
+def run_agent(user_request: str):
+    return
 
 if __name__ == "__main__":
     question = "看看当前目录里有什么，读一下 requirements.txt，告诉我这个项目需要哪些依赖"
