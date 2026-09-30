@@ -2,37 +2,68 @@
 
 ## 目标
 
-亲手理解「模型 + 工具 + 循环」这三件事是怎么咬合起来，让 Agent 自主干活的。
+在阶段 0 的 Agent Loop 基础上，建立可校验、可测试的工具执行层。
 
-## 怎么跑
+当前启用的工具：
 
-1. 先完成根目录的「快速开始」（装依赖 + 配 `.env`）
-2. 执行：`python agent.py`
+- `list_files`：列出目录内容
+- `read_file`：读取 UTF-8 文本文件
+- `write_file`：创建或覆盖文本文件
+- `edit_file`：唯一文本替换
+- `glob`：按 glob 模式查找路径
+- `grep`：搜索文本并返回文件和行号
+
+所有文件路径都会限制在 Agent 启动时的当前工作目录内。通用 `bash` 暂未启用，因为它需要阶段 3 的权限系统来控制危险命令。
+
+## 运行离线测试
+
+离线测试不调用模型，也不需要 API key：
+
+```bash
+cd /d/Raidenshogun/python/Agent
+python stage1-tools/test_tools.py
+```
+
+也可以使用 unittest 模块运行：
+
+```bash
+python -m unittest discover -s stage1-tools -p "test_*.py" -v
+```
+
+## 运行 Agent
+
+先安装依赖：
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+准备配置文件：
+
+```bash
+cp .env.example .env
+```
+
+然后填写 `.env` 中的 API key、服务地址和模型名，并从项目根目录运行：
+
+```bash
+python stage1-tools/agent.py
+```
+
+不要提交 `.env`。它已经被 `.gitignore` 忽略，公开仓库只保留 `.env.example`。
 
 ## 代码结构
 
-| 部分 | 作用 |
+| 文件 | 作用 |
 |------|------|
-| `TOOLS` | 工具的「定义」——只描述能力，不执行 |
-| `TOOL_FUNCS` | 工具的「实现」——真正的执行逻辑 |
-| `run_agent` | 核心循环：调模型 → 判断 → 执行 → 喂回 |
+| `tools.py` | 工具实现、路径限制和 Anthropic tool schema |
+| `agent.py` | 参数校验、异常收容、结果截断和 Agent Loop |
+| `test_tools.py` | 不调用模型的工具层测试 |
 
-## 跑通后，回答这三个问题（吃透的标志）
+## Stage 1 的学习重点
 
-1. **messages 里为什么要同时回填 assistant 的 tool_use 和 user 的 tool_result？**
-2. **while True 循环为什么一定能终止？**
-3. **system 提示词和工具的 description 各自起什么作用？**
-
-## 动手实验（强烈建议）
-
-把下面几处改一改，观察行为变化，比只看代码学得快：
-
-- 删掉 `system_prompt` 里「信息足够后就给出最终回答」这句话，看模型会不会反复调工具停不下来。
-- 把 `read_file` 的 description 改模糊（比如改成「读取」），看模型是否还会正确传 `path` 参数。
-- 新增一个工具（比如 `write_file`），观察只需要改哪几个地方（`TOOLS`、`TOOL_FUNCS`、一个实现函数）。
-- 把 `max_turns` 改成 1，看会发生什么。
-
-## 和下一阶段的关系
-
-阶段 0 只有 2 个工具、没有权限、没有上下文压缩。
-阶段 1 会把它扩展成一个真正能改代码的工具集（`write_file`、`grep`、`bash` 等）。
+1. 工具 schema 必须和实际函数参数保持一致。
+2. 模型传入的参数必须先校验，再执行函数。
+3. 工具异常应该作为 `tool_result` 返回给模型，而不是让整个循环崩溃。
+4. 大型工具结果必须截断，避免撑爆上下文。
+5. 修改文件时，`edit_file` 只允许替换唯一匹配的文本，避免误改多个位置。
