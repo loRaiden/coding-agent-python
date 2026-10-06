@@ -5,12 +5,24 @@ from typing import Any
 @dataclass
 class ContextWindow:
     max_tokens: int = 4_000
+    reserved_output_tokens: int = 1_024
     summary_max_chars: int = 4_000
     messages: list[dict[str, Any]] = field(default_factory=list)
     summary: str = ""
 
+    def __post_init__(self) -> None:
+        if self.max_tokens <= 0:
+            raise ValueError("max_tokens 必须大于 0")
+        if self.reserved_output_tokens < 0:
+            raise ValueError("reserved_output_tokens 不能小于 0")
+        if self.summary_max_chars <= 0:
+            raise ValueError("summary_max_chars 必须大于 0")
+
+    @property
+    def input_budget(self) -> int:
+        return max(1, self.max_tokens - self.reserved_output_tokens)
+
     def estimate_tokens(self, value: object) -> int:
-        # 粗略估算：中英文混合文本按约 4 个字符折算一个 token。
         if isinstance(value, str):
             return max(1, (len(value) + 3) // 4)
         if isinstance(value, dict):
@@ -23,53 +35,72 @@ class ContextWindow:
         return self.estimate_tokens(self.summary) + self.estimate_tokens(self.messages)
 
     def append(self, message: dict[str, Any]) -> None:
+        if not isinstance(message, dict) or "role" not in message:
+            raise ValueError("消息必须是包含 role 的对象")
         self.messages.append(message)
         self.compact_if_needed()
 
     def compact_if_needed(self) -> bool:
-        if self.token_count() <= self.max_tokens:
+        if self.token_count() <= self.input_budget:
             return False
 
-        keep_from = max(0, len(self.messages) - 1)
-        older = self.messages[:keep_from]
-        self.messages = self.messages[keep_from:]
-        if older:
-            compacted = self._render_for_summary(older)
-            self.summary = self._merge_summary(compacted)
+        groups = self._message_groups()
+        if len(groups) <= 1:
+            self._fit_single_message()
+            return True
+
+        keep_count = 1
+        while keep_count < len(groups) and self._groups_token_count(groups[keep_count:]) > self.input_budget:
+            keep_count += 1
+        older = [message for group in groups[:keep_count] for message in group]
+        self.messages = [message for group in groups[keep_count:] for message in group]
+        self.summary = self._merge_summary(self._render_for_summary(older))
         self._fit_summary_to_budget()
-        self._fit_latest_message_to_budget()
         return True
 
-    def _fit_latest_message_to_budget(self) -> None:
+    def _message_groups(self) -> list[list[dict[str, Any]]]:
+        groups: list[list[dict[str, Any]]] = []
+        for message in self.messages:
+            role = message.get("role")
+            if role == "user" and groups and groups[-1][0].get("role") == "assistant":
+                groups[-1].append(message)
+            elif role == "user" and groups and groups[-1][0].get("role") == "user":
+                groups[-1].append(message)
+            else:
+                groups.append([message])
+        return groups
+
+    def _groups_token_count(self, groups: list[list[dict[str, Any]]]) -> int:
+        return self.estimate_tokens([message for group in groups for message in group])
+
+    def _fit_single_message(self) -> None:
         if not self.messages:
             return
-        available_tokens = max(1, self.max_tokens - self.estimate_tokens(self.summary))
         message = self.messages[-1]
         content = message.get("content")
-        if isinstance(content, str):
-            max_chars = available_tokens * 4
-            if len(content) > max_chars:
-                message["content"] = content[:max_chars]
+        if not isinstance(content, str):
+            return
+        available = max(1, self.input_budget - self.estimate_tokens(self.summary) - self.estimate_tokens({"role": message.get("role")}))
+        marker = "\n... [消息已截断] ..."
+        max_chars = max(1, available * 4 - len(marker))
+        if len(content) > max_chars:
+            truncated = content[:max_chars] + marker
+            while max_chars > 1 and self.estimate_tokens({"role": message.get("role"), "content": truncated}) > self.input_budget:
+                max_chars = max(1, max_chars - 4)
+                truncated = content[:max_chars] + marker
+            message["content"] = truncated
 
     def _fit_summary_to_budget(self) -> None:
         message_tokens = self.estimate_tokens(self.messages)
-        available_tokens = max(0, self.max_tokens - message_tokens)
-        max_chars = available_tokens * 4
-        if len(self.summary) > max_chars:
-            self.summary = self.summary[-max_chars:] if max_chars else ""
+        available_tokens = max(0, self.input_budget - message_tokens)
+        max_chars = min(self.summary_max_chars, available_tokens * 4)
+        self.summary = self.summary[-max_chars:] if max_chars else ""
 
     def _render_for_summary(self, messages: list[dict[str, Any]]) -> str:
-        parts = []
-        for message in messages:
-            role = message.get("role", "unknown")
-            content = message.get("content", "")
-            parts.append(f"{role}: {content}")
-        return "\n".join(parts)
+        return "\n".join(f"{message.get('role', 'unknown')}: {message.get('content', '')}" for message in messages)
 
     def _merge_summary(self, new_text: str) -> str:
         merged = f"{self.summary}\n{new_text}".strip() if self.summary else new_text
-        if len(merged) <= self.summary_max_chars:
-            return merged
         return merged[-self.summary_max_chars :]
 
     def model_messages(self) -> list[dict[str, Any]]:

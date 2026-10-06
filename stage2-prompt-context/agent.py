@@ -1,7 +1,8 @@
 import os
 
+import tools
 from context import ContextWindow
-from prompt import default_prompt_context, build_system_prompt
+from prompt import build_system_prompt, default_prompt_context
 from tools import TOOLS, TOOLS_FUNCS
 
 MAX_TOOL_RESULT_CHARS = 8_000
@@ -51,7 +52,12 @@ def execute_tool_call(tool_use) -> dict:
         }
 
 
-def run_agent(user_request: str, max_turns: int = 10, max_context_tokens: int = 4_000) -> str:
+def run_agent(
+    user_request: str,
+    max_turns: int = 10,
+    max_context_tokens: int = 4_000,
+    max_output_tokens: int = 1_024,
+) -> str:
     try:
         import anthropic
         from dotenv import load_dotenv
@@ -61,9 +67,12 @@ def run_agent(user_request: str, max_turns: int = 10, max_context_tokens: int = 
     load_dotenv()
     client = anthropic.Anthropic()
     model = os.getenv("ANTHROPIC_MODEL", "deepseek-v4-flash")
-    prompt_context = default_prompt_context(__import__("tools").WORKSPACE, TOOLS)
+    prompt_context = default_prompt_context(tools.WORKSPACE, TOOLS)
     system_prompt = build_system_prompt(prompt_context)
-    context = ContextWindow(max_tokens=max_context_tokens)
+    context = ContextWindow(
+        max_tokens=max_context_tokens,
+        reserved_output_tokens=max_output_tokens,
+    )
     context.append({"role": "user", "content": user_request})
 
     for _ in range(max_turns):
@@ -72,7 +81,7 @@ def run_agent(user_request: str, max_turns: int = 10, max_context_tokens: int = 
             system=system_prompt,
             messages=context.model_messages(),
             tools=TOOLS,
-            max_tokens=1024,
+            max_tokens=max_output_tokens,
         )
         tool_uses = [block for block in response.content if block.type == "tool_use"]
         if not tool_uses:

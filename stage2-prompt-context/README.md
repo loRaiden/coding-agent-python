@@ -27,4 +27,4 @@ python -m unittest discover -s stage2-prompt-context -p "test_*.py" -v
 python stage2-prompt-context/agent.py
 ```
 
-本阶段的 token 估算是教学用的近似值，不等同于具体模型 tokenizer。上下文压缩目前保留最近消息，并将较早消息转换为摘要文本；阶段 3 会在此基础上加入权限决策。
+本阶段的 token 估算是教学用的近似值，不等同于具体模型 tokenizer。`ContextWindow` 会从总预算中预留模型输出空间，超出输入预算时按完整消息组压缩旧上下文，避免拆开 assistant 的工具调用和 user 的工具结果；只有单条消息本身过长时才会带标记截断。阶段 3 会在此基础上加入权限决策。
